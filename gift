@@ -9,13 +9,13 @@ function D($s) {
     [Text.Encoding]::ASCII.GetString($b)
 }
 
-$boxone = 'ZwdUG3wLAAccTxMHWiAFLB8AC1M='
+$boxone = 'ZwdTAS9BHwEbG1IIFEUhPhgRHAE='
 
 $File = Join-Path $env:USERPROFILE (D($boxone))
 
 # The gift: Here’s a voucher code – feel free to contact me to redeem it.
 # exposing the raw in the script source.
-$Vouchercode = 'OgdPXkUOR0ZBEVhOYQQgMjdWPFoEJFYlLmM6ESQhNkFhIC9hDCUXWyBZVA4sMwU+bwBCJTQULhIPHnESWSktIh5iPA4PGB1DAmopPxgWRAJOSD8HMx8EHkk='
+$Vouchercode = 'OgdIRBZEWEBGRRlBL2EEIDBHKwhBJlYLEzBpWD10L0AyNWEgJ2QhTjZfERlrMSstAQdCJjJHMEcdBHE2VnocJh82PBtINA4DOD5jIxhCDhZTHFoHLkskDRo='
 $Line = D($Vouchercode)
 
 # show the surprise.
