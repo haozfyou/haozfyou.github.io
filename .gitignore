@@ -17,6 +17,7 @@
 !/post.html
 !/css/
 !/js/
+!/gift
 
 # 3) 放行 git 与 GitHub Pages 自身需要的配置文件
 !/.gitignore
