@@ -1,0 +1,31 @@
+# ==========================================================
+# GitHub Pages 只发布静态站点本体
+#
+#   放行：index.html / post.html / css/ / js/
+#   其余一切文件默认不提交，包括：
+#     谜底.txt  Voucher_Code.txt  moji_cipher.txt  puzzle_cipher.txt  gift
+#     verify.py  xor_cipher.py  xor_cipher.ps1
+#     promt.yml  promt1.yml  promt2.yml
+#     start_server.bat / .ps1 / .sh   README.md
+# ==========================================================
+
+# 1) 默认忽略仓库根目录下的一切（/* 不递归，不影响已放行的目录内部）
+/*
+
+# 2) 只放行站点本体
+!/index.html
+!/post.html
+!/css/
+!/js/
+
+# 3) 放行 git 与 GitHub Pages 自身需要的配置文件
+!/.gitignore
+!/.nojekyll
+
+# 4) 兜底：任意层级的系统与缓存垃圾
+Thumbs.db
+Desktop.ini
+.DS_Store
+__pycache__/
+*.pyc
+

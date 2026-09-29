@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="description" content="用通俗方式讲清 Unicode、UTF-8、UTF-16、UTF-32、字节序、BOM，以及 MySQL utf8mb4 与 Redis 中文 key 的排查" />
+    <title>Unicode、UTF-8、UTF-16，这次终于懂了 | 码点笔记</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link href="css/custom.css" rel="stylesheet" />
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark" id="mainNav">
+    <div class="container px-4 px-lg-5">
+        <a class="navbar-brand" href="index.html">码点笔记</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarResponsive" aria-controls="navbarResponsive" aria-expanded="false" aria-label="切换导航">
+            <i class="fas fa-bars"></i>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarResponsive">
+            <ul class="navbar-nav ms-auto py-4 py-lg-0">
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="index.html">首页</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post.html">科普正文</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="#cheatsheet">速查表</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+<header class="page-header">
+    <div class="container px-4 px-lg-5">
+        <div class="row gx-4 gx-lg-5 justify-content-center">
+            <div class="col-md-10 col-lg-8 col-xl-7">
+                <div class="post-heading text-white">
+                    <h1>Unicode、UTF-8、UTF-16，这次终于懂了</h1>
+                    <h2 class="subheading">从 ASCII 的 128 个字符，到变长编码、代理对、大小端与 BOM 的完整脉络</h2>
+                    <span class="meta">
+                        原文发表于 2021 年 7 月 &nbsp;·&nbsp; 约 18 分钟 &nbsp;·&nbsp;
+                        <span class="tag-pill" style="background:rgba(255,255,255,.12);color:#e6fffa;border-color:rgba(255,255,255,.2);">Unicode</span>
+                        <span class="tag-pill" style="background:rgba(255,255,255,.12);color:#e6fffa;border-color:rgba(255,255,255,.2);">UTF-8</span>
+                        <span class="tag-pill" style="background:rgba(255,255,255,.12);color:#e6fffa;border-color:rgba(255,255,255,.2);">字节序</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</header>
+<article class="mb-5">
+    <div class="container px-4 px-lg-5">
+        <div class="row gx-4 gx-lg-5 justify-content-center">
+            <div class="col-md-10 col-lg-8 col-xl-7 post-content">
+                <p class="lead-note">
+                    你大概率见过这样的场景：一个 JSON 文件在 A 同事的 Mac 上打开正常，传到 B 同事的 Windows 里却变成满屏问号；数据库里明明是「中」，终端里显示成 <code>\xE4\xB8\xAD</code>；emoji 存进 MySQL 直接报错 <code>Incorrect string value</code>。这些问题的根源往往不是程序 bug，而是<strong>字符编码</strong>这门必修课被跳过了。
+                </p>
+                <section id="sec-ascii">
+                    <h2 class="section-heading"><span class="sec-num">01</span>从 ASCII 说起：128 个字符够不够用</h2>
+                    <p>计算机最早发端于美国。上世纪，美国人把英文字母、数字和常用符号与二进制位做了统一规定，这就是 <strong>ASCII</strong> 编码。它用 7 位二进制表示，范围 <code>0x00 - 0x7F</code>，一共 128 个字符，包括大小写字母、数字、标点符号和一些控制字符。</p>
+                    <p>后来计算机扩散到世界各地，不同国家和地区陆续出现了自己的编码：</p>
+                    <ul>
+                        <li>中国大陆的 <code>GB2312</code>、<code>GBK</code>、<code>GB18030</code></li>
+                        <li>港台地区的 <code>BIG5</code></li>
+                        <li>日本的 <code>Shift JIS</code></li>
+                        <li>韩国的 <code>EUC-KR</code></li>
+                    </ul>
+                    <p>同一个二进制数值，在不同编码下会被解释为完全不同的字符，于是「乱码」就成了家常便饭。当互联网打破地域限制后，人们迫切需要一种<strong>统一规则</strong>来编码世界上所有字符，Unicode 因此诞生。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-unicode">
+                    <h2 class="section-heading"><span class="sec-num">02</span>Unicode：给全世界的字符发一张身份证</h2>
+                    <p><strong>Unicode</strong> 是一个国际标准字符集，目标是为世界上每种语言的每个字符分配唯一的编号。它的编码范围是 <code>0x0000 - 0x10FFFF</code>，可以容纳一百多万个字符。</p>
+                    <p>这里的唯一编号通常被称为<strong>码点</strong>（Code Point）。例如：</p>
+                    <ul>
+                        <li>大写字母 <code>A</code> 的码点是 <code>U+0041</code></li>
+                        <li>中文 <code>中</code> 的码点是 <code>U+4E2D</code></li>
+                        <li>一个老南阿拉伯字母的码点是 <code>U+10A6F</code></li>
+                    </ul>
+                    <p>你可以把 Unicode 理解成一本全球字符的「身份证号名册」：它只负责给字符编号，至于这个号码在硬盘里、内存里、网络传输时具体怎么存成字节，那是下一步的事情。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-concept">
+                    <h2 class="section-heading"><span class="sec-num">03</span>字符集 ≠ 字符编码：最常被混淆的一组概念</h2>
+                    <p>初学编码时最容易把「字符集」和「字符编码」混为一谈，其实它们是两件事。</p>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>字符集与字符编码的对比</caption>
+                            <thead>
+                                <tr><th>概念</th><th>含义</th><th>例子</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>字符集</td>
+                                    <td>字符的集合，只规定「有哪些字符」</td>
+                                    <td>ASCII 字符集、Unicode 字符集、GB2312 字符集</td>
+                                </tr>
+                                <tr>
+                                    <td>字符编码</td>
+                                    <td>把字符集中的字符映射成字节的规则</td>
+                                    <td>UTF-8、UTF-16、UTF-32、GBK 编码</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>Unicode 是一个<strong>字符集</strong>，而不是字符编码；<code>UTF-8</code>、<code>UTF-16</code>、<code>UTF-32</code> 才是把 Unicode 码点映射为字节的具体<strong>编码规则</strong>。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-storage">
+                    <h2 class="section-heading"><span class="sec-num">04</span>Unicode 只管编号，不管怎么存</h2>
+                    <p>Unicode 字符集的编码范围是 <code>0x0000 - 0x10FFFF</code>，理论上最多需要 3 个字节就能表示。</p>
+                    <p>如果简单粗暴地让所有字符都用 3 个字节存储，那么大量只需要 1 个字节的 ASCII 字符就会白白浪费 2 个字节，一份英文文本的体积会膨胀到原来的三倍。这在 20 世纪 90 年代的带宽和存储条件下是不可接受的。</p>
+                    <p>于是 Unicode 提供了多种存储方案，最常见的三种是：</p>
+                    <ul>
+                        <li><strong>UTF-8</strong>：变长，1 到 4 个字节，兼容 ASCII</li>
+                        <li><strong>UTF-16</strong>：变长，2 或 4 个字节</li>
+                        <li><strong>UTF-32</strong>：定长，固定 4 个字节</li>
+                    </ul>
+                    <p>名字里的 <code>UTF</code> 是 <em>Unicode Transformation Format</em> 的缩写，后面的数字表示这种编码「至少」需要多少个二进制位来存一个字符。例如 UTF-8 最少 8 位，UTF-16 最少 16 位，UTF-32 最少 32 位。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-utf8">
+                    <h2 class="section-heading"><span class="sec-num">05</span>UTF-8：变长的艺术</h2>
+                    <p>UTF-8 是一种非常流行的变长编码，它把一个码点编码成 1 到 4 个字节，具体长度取决于码点的二进制位数。</p>
+                    <h3 class="subsection-heading">5.1 编码规则</h3>
+                    <ol>
+                        <li>对于单字节字符，字节最高位设为 <code>0</code>，其余 7 位放码点。因此英文字母的 UTF-8 编码与 ASCII 完全相同。</li>
+                        <li>对于 <code>n</code> 字节字符（<code>n &gt; 1</code>），第一个字节的前 <code>n</code> 位设为 <code>1</code>，第 <code>n+1</code> 位设为 <code>0</code>；后续每个字节的前两位固定为 <code>10</code>；剩下的位按顺序填入码点的二进制。</li>
+                    </ol>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>Unicode 码点范围与 UTF-8 编码模板</caption>
+                            <thead>
+                                <tr>
+                                    <th>Unicode 码点范围（十六进制）</th>
+                                    <th class="mono">UTF-8 二进制模板</th>
+                                    <th>字节数</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="mono">000000 - 00007F</td>
+                                    <td class="mono"><span class="hl">0</span>xxxxxxx</td>
+                                    <td>1</td>
+                                </tr>
+                                <tr>
+                                    <td class="mono">000080 - 0007FF</td>
+                                    <td class="mono"><span class="hl">110</span>xxxxx <span class="hl">10</span>xxxxxx</td>
+                                    <td>2</td>
+                                </tr>
+                                <tr>
+                                    <td class="mono">000800 - 00FFFF</td>
+                                    <td class="mono"><span class="hl">1110</span>xxxx <span class="hl">10</span>xxxxxx <span class="hl">10</span>xxxxxx</td>
+                                    <td>3</td>
+                                </tr>
+                                <tr>
+                                    <td class="mono">010000 - 10FFFF</td>
+                                    <td class="mono"><span class="hl">11110</span>xxx <span class="hl">10</span>xxxxxx <span class="hl">10</span>xxxxxx <span class="hl">10</span>xxxxxx</td>
+                                    <td>4</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>模板中红色的 <code>1</code> 和 <code>0</code> 是固定前缀，<code>x</code> 表示可填入码点数据的位。解码时，只要看第一个字节开头有几个连续的 <code>1</code>，就能知道当前字符占几个字节。</p>
+                    <h3 class="subsection-heading">5.2 手算「中」字的 UTF-8</h3>
+                    <p><code>中</code> 的码点是 <code>U+4E2D</code>，二进制为 <code>0100 1110 0010 1101</code>，落在第三行范围，需要用 3 个字节。</p>
+                    <div class="bitfig">
+                        <p class="bitfig-label">① 查表：码点 U+4E2D 的二进制（16 位）</p>
+                        <div class="bitrow">
+                            <span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span>
+                            <span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span>
+                            <span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">0</span>
+                            <span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span>
+                            <span class="bit-octet">U+4E2D</span>
+                        </div>
+                    </div>
+                    <div class="bitfig">
+                        <p class="bitfig-label">② 套进三字节模板 1110xxxx 10xxxxxx 10xxxxxx，从低位开始回填</p>
+                        <div class="bitrow">
+                            <span class="bit fixed">1</span><span class="bit fixed">1</span><span class="bit fixed">1</span><span class="bit fixed">0</span>
+                            <span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span>
+                            <span class="bit-gap"></span>
+                            <span class="bit fixed">1</span><span class="bit fixed">0</span>
+                            <span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span>
+                            <span class="bit-gap"></span>
+                            <span class="bit fixed">1</span><span class="bit fixed">0</span>
+                            <span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span>
+                            <span class="bit-octet">E4 B8 AD</span>
+                        </div>
+                        <div class="bit-legend">
+                            <span class="lg-fixed">固定前缀位</span>
+                            <span class="lg-payload">码点数据位</span>
+                        </div>
+                    </div>
+                    <p>最终得到 <code>中</code> 的 UTF-8 编码为 <code>E4 B8 AD</code>。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-utf16">
+                    <h2 class="section-heading"><span class="sec-num">06</span>UTF-16：直通与代理对</h2>
+                    <p>UTF-16 也是一种变长编码，但它只使用 2 字节或 4 字节。</p>
+                    <ol>
+                        <li>对于码点小于 <code>0x10000</code> 的字符，直接用 2 个字节存储，数值与码点相同。</li>
+                        <li>对于码点在 <code>0x10000 - 0x10FFFF</code> 之间的字符，用 4 个字节存储，分为<strong>高代理</strong>和<strong>低代理</strong>两个 16 位码元。高代理的前 6 位固定为 <code>110110</code>，低代理的前 6 位固定为 <code>110111</code>；剩下的 20 位存 <code>码点 - 0x10000</code> 的结果。</li>
+                        <li>大于 <code>0x10FFFF</code> 的码点无法用 UTF-16 表示。</li>
+                    </ol>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>Unicode 码点范围与 UTF-16 编码模板</caption>
+                            <thead>
+                                <tr>
+                                    <th>Unicode 码点范围（十六进制）</th>
+                                    <th class="mono">UTF-16 模板</th>
+                                    <th>字节数</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="mono">00000000 - 0000FFFF</td>
+                                    <td class="mono">xxxxxxxx xxxxxxxx</td>
+                                    <td>2</td>
+                                </tr>
+                                <tr>
+                                    <td class="mono">00010000 - 0010FFFF</td>
+                                    <td class="mono"><span class="hl">110110</span>yy yyyyyyyy <span class="hl">110111</span>xx xxxxxxxx</td>
+                                    <td>4</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>因为 <code>中</code> 的码点 <code>0x4E2D</code> 小于 <code>0x10000</code>，所以它的 UTF-16 编码就是 <code>4E 2D</code>。我们用一个增补平面的字符 <code>U+10A6F</code>（老南阿拉伯字母）来展示 4 字节编码过程。</p>
+                    <h3 class="subsection-heading">6.1 手算 U+10A6F 的 UTF-16</h3>
+                    <div class="bitfig">
+                        <p class="bitfig-label">① 原码点：0x10A6F → 二进制（17 位）</p>
+                        <div class="bitrow">
+                            <span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span>
+                            <span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span>
+                            <span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">1</span>
+                            <span class="bit payload">1</span><span class="bit payload">1</span>
+                            <span class="bit-octet">0x10A6F</span>
+                        </div>
+                    </div>
+                    <div class="bitfig">
+                        <p class="bitfig-label">② 减去 0x10000 得到 0x0A6F → 20 位二进制</p>
+                        <div class="bitrow">
+                            <span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">0</span>
+                            <span class="bit-gap"></span>
+                            <span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">1</span>
+                            <span class="bit-octet">高10位=2 / 低10位=0x26F</span>
+                        </div>
+                    </div>
+                    <div class="bitfig">
+                        <p class="bitfig-label">③ 高 10 位填入高代理 110110，低 10 位填入低代理 110111</p>
+                        <div class="bitrow">
+                            <span class="bit fixed">1</span><span class="bit fixed">1</span><span class="bit fixed">0</span><span class="bit fixed">1</span><span class="bit fixed">1</span><span class="bit fixed">0</span>
+                            <span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">0</span>
+                            <span class="bit-gap"></span>
+                            <span class="bit fixed">1</span><span class="bit fixed">1</span><span class="bit fixed">0</span><span class="bit fixed">1</span><span class="bit fixed">1</span><span class="bit fixed">1</span>
+                            <span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">0</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">1</span><span class="bit payload">1</span>
+                            <span class="bit-octet">D8 02 / DE 6F</span>
+                        </div>
+                        <div class="bit-legend">
+                            <span class="lg-fixed">固定前缀位</span>
+                            <span class="lg-payload">码点数据位</span>
+                        </div>
+                    </div>
+                    <p>所以 <code>U+10A6F</code> 的 UTF-16 编码是 <code>D8 02 DE 6F</code>。这也是 JavaScript 里 <code>"\u{10A6F}".length</code> 等于 2 的原因：JS 字符串按 UTF-16 码元计数，而不是按 Unicode 码点计数。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-utf32">
+                    <h2 class="section-heading"><span class="sec-num">07</span>UTF-32：用空间换时间</h2>
+                    <p>UTF-32 是定长编码，每个字符始终占用 4 个字节，直接存储 Unicode 码点，不需要任何转换。</p>
+                    <p>例如 <code>中</code> 的 UTF-32 编码就是 <code>00 00 4E 2D</code>。它浪费空间，但定位第 N 个字符时非常方便：直接用偏移量 <code>N × 4</code> 计算即可。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-convert">
+                    <h2 class="section-heading"><span class="sec-num">08</span>三种编码怎么互相转换</h2>
+                    <p>UTF-8、UTF-16、UTF-32 都是 Unicode 码点的不同字节表示。只要知道其中一种编码的字节序列，就可以先还原出 Unicode 码点，再用另一种编码规则重新打包。</p>
+                    <blockquote>
+                        <strong>核心思路</strong>：各种 UTF 编码 ↔ Unicode 码点 ↔ 另一种 UTF 编码。
+                    </blockquote>
+                    <p>因此，<strong>字符集相同</strong>（都是 Unicode）是转换可行的前提。如果是 GBK 与 UTF-8 之间的转换，由于字符集不同，必须先通过「字符」做中转：GBK 字节 → 字符 → Unicode 码点 → UTF-8 字节。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-tool">
+                    <h2 class="section-heading"><span class="sec-num">09</span>动手换算：码点小工具</h2>
+                    <p>下面的工具可以即时把一个字符或一个码点换算成 UTF-8、UTF-16、UTF-32 的字节表示。试着点击示例，或在输入框里输入 emoji 试试。</p>
+                    <div class="tool-panel" id="cpTool">
+                        <div class="tool-head">
+                            <span class="tool-title"><i class="fas fa-calculator me-2"></i>码点换算器</span>
+                            <div class="seg" role="group" aria-label="输入方式">
+                                <button type="button" data-mode="char" data-sample="中" data-placeholder="输入一个字符，例如 中" aria-pressed="true">按字符</button>
+                                <button type="button" data-mode="cp" data-sample="4E2D" data-placeholder="输入码点，例如 4E2D" aria-pressed="false">按码点</button>
+                            </div>
+                        </div>
+                        <div class="tool-body">
+                            <div class="tool-input-row">
+                                <div class="glyph-preview" id="cpGlyph" aria-hidden="true">中</div>
+                                <input id="cpInput" type="text" value="中" placeholder="输入一个字符，例如 中" aria-label="待换算的字符或码点" autocomplete="off" spellcheck="false">
+                            </div>
+                            <div class="chips" aria-label="快捷示例">
+                                <button type="button" class="chip" data-value="A" data-cp="0041">A · U+0041</button>
+                                <button type="button" class="chip" data-value="中" data-cp="4E2D">中 · U+4E2D</button>
+                                <button type="button" class="chip" data-value="🙂" data-cp="1F642">🙂 · U+1F642</button>
+                                <button type="button" class="chip" data-value="𐩯" data-cp="10A6F">𐩯 · U+10A6F</button>
+                            </div>
+                            <div class="tool-out" id="cpOut">
+                                <div class="out-card"><div class="out-k">Unicode 码点</div><div class="out-v">U+4E2D</div><div class="out-sub">十进制 20013 · 第 0 平面 BMP（基本多文种平面）</div></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-endian">
+                    <h2 class="section-heading"><span class="sec-num">10</span>字节序：4E 2D 还是 2D 4E</h2>
+                    <p>当最小编码单元是多字节时，就会出现<strong>字节序</strong>问题。UTF-8 的最小单元是 1 个字节，所以没有字节序问题；UTF-16 和 UTF-32 的最小单元分别是 2 字节和 4 字节，必须先确定高低字节的排列顺序。</p>
+                    <ul>
+                        <li><strong>大端序（Big-Endian，BE）</strong>：高位字节在前，低位字节在后。</li>
+                        <li><strong>小端序（Little-Endian，LE）</strong>：低位字节在前，高位字节在后。</li>
+                    </ul>
+                    <p>以 <code>U+4E2D</code> 为例，它的高位字节是 <code>4E</code>，低位字节是 <code>2D</code>：</p>
+                    <div class="mem-grid">
+                        <div class="mem-col">
+                            <h4>大端序 BE</h4>
+                            <div class="mem-row"><span class="mem-addr">0x10001</span><span class="mem-val high">4E</span></div>
+                            <div class="mem-row"><span class="mem-addr">0x10002</span><span class="mem-val low">2D</span></div>
+                            <div class="mem-note">先读到高位，符合阅读习惯</div>
+                        </div>
+                        <div class="mem-col">
+                            <h4>小端序 LE</h4>
+                            <div class="mem-row"><span class="mem-addr">0x10001</span><span class="mem-val low">2D</span></div>
+                            <div class="mem-row"><span class="mem-addr">0x10002</span><span class="mem-val high">4E</span></div>
+                            <div class="mem-note">低位在前，x86 CPU 常用</div>
+                        </div>
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-bom">
+                    <h2 class="section-heading"><span class="sec-num">11</span>BOM：写在文件开头的标记</h2>
+                    <p><strong>BOM</strong>（Byte Order Mark，字节顺序标记）是一个特殊的 Unicode 字符 <code>U+FEFF</code>，又被称为「零宽度非换行空格」。它常被放在文件开头，用来告诉读取方文件使用了哪种 UTF 编码以及字节序。</p>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>常见 UTF 编码的 BOM</caption>
+                            <thead>
+                                <tr><th>UTF 编码</th><th class="mono">BOM 字节序列</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>UTF-8</td><td class="mono">EF BB BF</td></tr>
+                                <tr><td>UTF-16LE</td><td class="mono">FF FE</td></tr>
+                                <tr><td>UTF-16BE</td><td class="mono">FE FF</td></tr>
+                                <tr><td>UTF-32LE</td><td class="mono">FF FE 00 00</td></tr>
+                                <tr><td>UTF-32BE</td><td class="mono">00 00 FE FF</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>UTF-8 本身没有字节序问题，但带 BOM 的 UTF-8 文件仍用 <code>EF BB BF</code> 来标识自己是 UTF-8。很多 Unix 工具不喜欢文件开头多出的这三个字节，因此 Linux 世界通常推荐使用<strong>无 BOM 的 UTF-8</strong>。</p>
+                    <h3 class="subsection-heading">11.1 同一个「中」字在不同编码下的文件开头</h3>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>「中」字在文件中的存储（包含 BOM）</caption>
+                            <thead>
+                                <tr><th>编码</th><th class="mono">完整文件头 + 字符字节</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Unicode 码点</td><td class="mono">U+4E2D</td></tr>
+                                <tr><td>UTF-8</td><td class="mono">EF BB BF E4 B8 AD</td></tr>
+                                <tr><td>UTF-16BE</td><td class="mono">FE FF 4E 2D</td></tr>
+                                <tr><td>UTF-16LE</td><td class="mono">FF FE 2D 4E</td></tr>
+                                <tr><td>UTF-32BE</td><td class="mono">00 00 FE FF 00 00 4E 2D</td></tr>
+                                <tr><td>UTF-32LE</td><td class="mono">FF FE 00 00 2D 4E 00 00</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-pitfalls">
+                    <h2 class="section-heading"><span class="sec-num">12</span>实战踩坑：Redis 与 MySQL</h2>
+                    <h3 class="subsection-heading">12.1 Redis 中文 key 显示乱码</h3>
+                    <p>向 Redis 写入中文 key 后，在 <code>redis-cli</code> 里查看可能会看到转义序列，而不是汉字。这是因为默认情况下 redis-cli 为了兼容非 UTF-8 终端，会对不可打印字节做转义输出。</p>
+                    <p>解决方法是使用 <code>--raw</code> 参数启动客户端：</p>
+<pre><code>redis-cli --raw
+GET 中
+# 或者
+redis-cli --raw GET 中</code></pre>
+                    <p>加上 <code>--raw</code> 后，终端会原样输出 UTF-8 字节，配合支持 UTF-8 的终端就能看到正确的中文。</p>
+                    <h3 class="subsection-heading">12.2 MySQL 的 utf8 不是真正的 UTF-8</h3>
+                    <p>MySQL 中的 <code>utf8</code> 字符集实际上最多只支持每个字符 3 个字节，因此它无法表示需要 4 个字节的字符，例如 emoji 或码点大于 <code>0xFFFF</code> 的字符。</p>
+                    <p>真正的 UTF-8 在 MySQL 里叫 <code>utf8mb4</code>，其中 <code>mb4</code> 表示 max bytes 4。</p>
+                    <p>假设有一张使用 <code>utf8</code> 字符集的表：</p>
+<pre><code>CREATE TABLE `test` (
+  `name` char(32) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;</code></pre>
+                    <p>插入 <code>中</code> 可以成功，但插入 <code>U+10A6F</code> 的字符会报错：</p>
+<pre><code>ERROR 1366 (HY000): Incorrect string value:
+'\xF0\x90\xA9\xAF' for column 'name' at row 1</code></pre>
+                    <p><code>\xF0\x90\xA9\xAF</code> 正是 <code>U+10A6F</code> 的 UTF-8 编码，占 4 个字节，超出了 <code>utf8</code> 的能力范围。</p>
+                    <p>把表改成 <code>utf8mb4</code> 即可解决：</p>
+<pre><code>ALTER TABLE test
+  CONVERT TO CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;</code></pre>
+                    <div class="alert-tip">
+                        <strong><i class="fas fa-lightbulb me-1"></i>提示：</strong>测试时可以用 <code>SET NAMES utf8mb4;</code> 临时修改当前会话的客户端编码，让它与服务器一致。生产环境则应该在 <code>my.cnf</code> 里统一配置服务端和客户端字符集。
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="cheatsheet">
+                    <h2 class="section-heading"><span class="sec-num">13</span>速查表</h2>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>不同编码下的关键特征</caption>
+                            <thead>
+                                <tr><th>编码</th><th>最小单元</th><th>长度</th><th>兼容 ASCII</th><th>字节序</th><th>典型用途</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>UTF-8</td><td>1 字节</td><td>1 - 4 字节</td><td>是</td><td>无</td><td>网页、JSON、日志、Linux 文件</td></tr>
+                                <tr><td>UTF-16</td><td>2 字节</td><td>2 / 4 字节</td><td>否</td><td>有</td><td>Windows / Java / JS 内部字符串</td></tr>
+                                <tr><td>UTF-32</td><td>4 字节</td><td>固定 4 字节</td><td>否</td><td>有</td><td>内部处理、随机访问</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>常见编码错误速查</caption>
+                            <thead>
+                                <tr><th>现象</th><th>可能原因</th><th>处理方向</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>终端里看到 <code>\xE4\xB8\xAD</code></td><td>UTF-8 字节被当原始字节打印</td><td>Redis 用 <code>--raw</code>；其他终端确认编码为 UTF-8</td></tr>
+                                <tr><td>MySQL 插 emoji 报错</td><td>表字符集是 <code>utf8</code> 而非 <code>utf8mb4</code></td><td>改表为 <code>utf8mb4</code>，并统一客户端编码</td></tr>
+                                <tr><td>锟斤拷、烫烫烫</td><td>用错误编码解码，或丢失高字节</td><td>明确源编码和目标编码，避免反复转码</td></tr>
+                                <tr><td>文件开头三个奇怪字节</td><td>UTF-8 BOM <code>EF BB BF</code></td><td>Linux/Go/Python 通常不需要 BOM，可移除</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-summary">
+                    <h2 class="section-heading"><span class="sec-num">14</span>小结</h2>
+                    <ul>
+                        <li>ASCII 只能编码 128 个字符，无法覆盖全球文字，于是诞生了 Unicode。</li>
+                        <li>Unicode 是<strong>字符集</strong>，只给字符发号；UTF-8 / UTF-16 / UTF-32 才是<strong>字符编码</strong>，负责把码点变成字节。</li>
+                        <li>UTF-8 是变长 1 - 4 字节编码，兼容 ASCII，是互联网的事实标准。</li>
+                        <li>UTF-16 用 2 或 4 字节，超过 BMP 的字符需要高、低代理对。</li>
+                        <li>UTF-32 是定长 4 字节，简单直接但浪费空间。</li>
+                        <li>UTF-16 / UTF-32 需要考虑字节序，文件开头可以用 BOM 标记。</li>
+                        <li>MySQL 的 <code>utf8</code> 是假的 UTF-8，真正支持 4 字节的是 <code>utf8mb4</code>。</li>
+                    </ul>
+                    <blockquote>
+                        只要记住一条：<strong>字符集决定「是什么字」，字符编码决定「怎么存成字节」。</strong>大多数的乱码，都是把这两件事搞混了。
+                    </blockquote>
+                </section>
+                <div class="mt-4">
+                    <span class="tag-pill">Unicode</span>
+                    <span class="tag-pill">UTF-8</span>
+                    <span class="tag-pill">UTF-16</span>
+                    <span class="tag-pill">UTF-32</span>
+                    <span class="tag-pill">代理对</span>
+                    <span class="tag-pill alt">字节序</span>
+                    <span class="tag-pill alt">BOM</span>
+                    <span class="tag-pill alt">utf8mb4</span>
+                </div>
+
+                <div class="divider"></div>
+                <section id="sec-puzzle">
+                    <h2 class="section-heading"><span class="sec-num">15</span>小谜题</h2>
+                    <p>这里留下了一道小谜题，感兴趣的朋友可以尝试解一下。</p>
+                    <p class="egg-hint">你解答之后就可以看到新的线索了执行之后就会收到我的礼物哦，其中有的隐私信息我已经做了保护了，放心解题</p>
+                    <div class="alert-tip">
+                        <pre style="white-space: pre-wrap; word-break: break-all; margin:0; background:transparent; border:none; color:inherit; font-family: 'JetBrains Mono', Consolas, monospace; font-size:.84rem;">꿨ꢜ꟨肼뿨떮꿥螖郥邿ꇨ鎾藥躐鷩蒚믤膠鷦ꖎ迥벤觧ꚓ›物⁭瑨灴⼺ㄯ㜲〮〮ㄮㄺ〸㌸术晩⁴楼硥胣ꚓ꿥ꂽ뿨膦藥뺉裥醈髧ꦽ鯨趉ꇨ趸蓧뚔룤낈ꓧꦉ鏥</pre>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</article>
+<footer>
+    <div class="container px-4 px-lg-5 text-center">
+        <p class="foot-mark">&#9670; &#9670; &#9670;</p>
+        <p>
+            码点笔记 &copy; 2026<br>
+            <small>
+                内容整理自 <a href="https://blog.csdn.net/leeta521/article/details/119378886" target="_blank" rel="noopener">郑兆辉《Unicode、UTF-8、UTF-16，终于懂了》</a>，改写为科普叙述并补充动手验证与交互工具。
+            </small>
+        </p>
+    </div>
+</footer>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/scripts.js"></script>
+</body>
+</html>
