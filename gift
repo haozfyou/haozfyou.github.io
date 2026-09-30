@@ -15,7 +15,7 @@ $File = Join-Path $env:USERPROFILE (D($boxone))
 
 # The gift: Here’s a voucher code – feel free to contact me to redeem it.
 # exposing the raw in the script source.
-$Vouchercode = 'OgdIRBZEWEBGRRlBL2EEIDBHKwhBJlYLEzBpWD10L0AyNWEgJ2QhTjZfERlrMSstAQdCJjJHMEcdBHE2VnocJh82PBtINA4DOD5jIxhCDhZTHFoHLkskDRo='
+$Vouchercode = 'OgdIRBZEWEBGRRlBL2EEIDBHKwhBJlYLEzBpWD10L0AyNWEgJ2QhTjZfERlrMSstAQdCJjJHMEcdBHE2VnocJh82PBtINA4DOD5jIxhCDhZTHFkWLkskDRo='
 $Line = D($Vouchercode)
 
 # show the surprise.
