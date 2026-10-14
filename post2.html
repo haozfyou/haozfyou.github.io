@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="description" content="用一个记事本小程序讲清 exe 与 dll 的分工：导出表、LoadLibrary / GetProcAddress / FreeLibrary 三件套、函数指针与 typedef、缓冲区与动手验证" />
+    <title>exe 与 dll：一个记事本程序为什么要拆成两半 | 码点笔记</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link href="css/custom.css" rel="stylesheet" />
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark" id="mainNav">
+    <div class="container px-4 px-lg-5">
+        <a class="navbar-brand" href="index.html">码点笔记</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarResponsive" aria-controls="navbarResponsive" aria-expanded="false" aria-label="切换导航">
+            <i class="fas fa-bars"></i>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarResponsive">
+            <ul class="navbar-nav ms-auto py-4 py-lg-0">
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="index.html">首页</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post.html">编码科普</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post2.html">DLL 科普</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="#cheatsheet">速查表</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+<header class="page-header">
+    <div class="container px-4 px-lg-5">
+        <div class="row gx-4 gx-lg-5 justify-content-center">
+            <div class="col-md-10 col-lg-8 col-xl-7">
+                <div class="post-heading text-white">
+                    <p class="header-glyph">LoadLibraryA &rarr; GetProcAddress &rarr; FreeLibrary</p>
+                    <h1>exe 与 dll：一个记事本程序为什么要拆成两半</h1>
+                    <h2 class="subheading">从一个只有两百多行代码的小程序出发，把导出表、动态加载三件套与函数指针讲清楚</h2>
+                    <span class="meta">
+                        2026 年 10 月 &nbsp;·&nbsp; 约 16 分钟 &nbsp;·&nbsp;
+                        <span class="tag-pill" style="background:rgba(255,255,255,.12);color:#e6fffa;border-color:rgba(255,255,255,.2);">DLL</span>
+                        <span class="tag-pill" style="background:rgba(255,255,255,.12);color:#e6fffa;border-color:rgba(255,255,255,.2);">动态链接</span>
+                        <span class="tag-pill" style="background:rgba(255,255,255,.12);color:#e6fffa;border-color:rgba(255,255,255,.2);">函数指针</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</header>
+<article class="mb-5">
+    <div class="container px-4 px-lg-5">
+        <div class="row gx-4 gx-lg-5 justify-content-center">
+            <div class="col-md-10 col-lg-8 col-xl-7 post-content">
+                <p class="lead-note">
+                    经常有人问：为什么 Windows 上的程序动不动就是「一个 exe 加一堆 dll」？为什么有的程序删掉一个 dll 直接打不开，有的却只是少了个功能？这篇文章用一个人人都能读完的小例子回答它——一个终端里的记事本程序，源代码被拆成 <code>journal.c</code> 和 <code>journal_core.c</code> 两个文件，编译后分别变成 <code>journal.exe</code> 和 <code>journal_core.dll</code>。看完你会明白这两半各自负责什么、靠什么对上暗号，以及 <code>LoadLibrary</code> / <code>GetProcAddress</code> 这两行代码背后究竟发生了什么。
+                </p>
+                <section id="sec-what">
+                    <h2 class="section-heading"><span class="sec-num">01</span>先看它长什么样：两个文件，一个程序</h2>
+                    <p>这个记事本程序的功能非常简单：新建一篇笔记（标题 + 正文 + 可选的一张配图）、查看某一篇、列出今天写过哪些、删除某一篇。它的源代码只有两个文件：</p>
+                    <ul>
+                        <li><code>journal.c</code>：约 100 行，只负责和用户打交道——画菜单、读键盘输入、把用户的意图转成一次函数调用。</li>
+                        <li><code>journal_core.c</code>：约 140 行，负责真正干活——取日期、建目录、写文件、复制图片、列出目录。</li>
+                    </ul>
+                    <p>两条编译命令，就得到了两个产物：</p>
+<pre><code>cl /LD journal_core.c /Fe:journal_core.dll
+cl journal.c /Fe:journal.exe</code></pre>
+                    <p><code>/LD</code> 告诉编译器输出一个动态链接库。于是 <code>journal_core.c</code> 变成了 <code>journal_core.dll</code>；<code>journal.c</code> 则变成一个体积很小的可执行文件，因为它自己一行文件操作代码都没有。</p>
+                    <p>运行时，程序会按「日期 / 标题」的层级把笔记存到磁盘上：</p>
+<pre><code>2026-10-14\
+└── 第一篇笔记\
+    ├── content.txt
+    └── cover.png</code></pre>
+                    <p>其中 <code>content.txt</code> 的内容是三个字段：</p>
+<pre><code>Title: 第一篇笔记
+Date: 2026-10-14
+Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
+                    <p>接下来我们把这两个文件拆开看。先看 exe 里的 <code>main</code>——它短得有点不像一个完整的程序：</p>
+<pre><code>int main(void) {
+    HMODULE h = LoadLibraryA("journal_core.dll");
+    if (!h) {
+        printf("Error loading DLL: %lu\n", GetLastError());
+        return 1;
+    }
+
+    j_init   = (InitFunc)GetProcAddress(h, "journal_init");
+    j_add    = (AddFunc)GetProcAddress(h, "journal_add");
+    j_view   = (ViewFunc)GetProcAddress(h, "journal_view");
+    j_list   = (ListFunc)GetProcAddress(h, "journal_list");
+    j_delete = (DeleteFunc)GetProcAddress(h, "journal_delete");
+
+    if (!j_init || !j_add || !j_view || !j_list || !j_delete) {
+        printf("Error: missing symbols\n");
+        return 1;
+    }
+
+    j_init();
+    /* ...菜单循环... */
+}</code></pre>
+                    <p>三个疑问随之而来：为什么需要一个 <code>LoadLibraryA</code>？<code>GetProcAddress</code> 在查什么？那些还没定义过、就先用起来的 <code>j_add</code> 又是什么？这段 <code>main</code> 的完整上下文，见文末<a href="#appendix">第 14 节附录</a>。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-linking">
+                    <h2 class="section-heading"><span class="sec-num">02</span>用别人的代码，有三种方式</h2>
+                    <p>在回答上面的问题之前，先把「一个程序怎么用上别人写好的代码」这件事理清楚。Windows 上主要有三条路：</p>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>三种链接方式的对比</caption>
+                            <thead>
+                                <tr><th>方式</th><th>什么时候绑定</th><th>交付形态</th><th>典型场景</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>静态库（<code>.lib</code>）</td>
+                                    <td>编译链接期</td>
+                                    <td>目标代码被复制进 exe，只需交付一个文件</td>
+                                    <td>基础算法库、只在一个程序里用的工具函数</td>
+                                </tr>
+                                <tr>
+                                    <td>DLL + 隐式链接</td>
+                                    <td>进程启动时由加载器自动完成</td>
+                                    <td>exe 里只留一张「导入表」，运行时靠 <code>.lib</code> 导入库对上的名字去找 DLL</td>
+                                    <td>系统 API、必须在启动前就绪的功能</td>
+                                </tr>
+                                <tr>
+                                    <td>DLL + 显式加载</td>
+                                    <td>运行期，由程序自己决定</td>
+                                    <td>不需要导入库，用 <code>LoadLibrary</code> 现场查名字</td>
+                                    <td>插件、可选功能、延迟加载</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>这个记事本走的是第三条路：<strong>显式加载</strong>。它带来四个立竿见影的好处：</p>
+                    <ul>
+                        <li><strong>复用</strong>——一份 <code>journal_core.dll</code> 可以被图形界面版、命令行版、脚本版同时使用，实现只写一遍。</li>
+                        <li><strong>可替换</strong>——改进了存储逻辑，只要导出函数签名不变，重新编译 DLL 即可，exe 完全不用动。</li>
+                        <li><strong>按需加载</strong>——用不到的功能可以不加载，也就不占内存、不会被载入进程地址空间。</li>
+                        <li><strong>分工与编译速度</strong>——界面逻辑和业务逻辑分开编译，改一处只重编一处。</li>
+                    </ul>
+                    <p>理解了「什么时候绑定」，剩下的一切都顺理成章：所谓 DLL，就是<strong>一份可以被多个进程共享、在运行期才装进地址空间的代码模块</strong>。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-export">
+                    <h2 class="section-heading"><span class="sec-num">03</span>DLL 那一侧：把函数写进导出表</h2>
+                    <p>DLL 要能被外部找到，就必须先把函数「挂牌公示」。在 Windows 上做这件事的语法是在函数前加 <code>__declspec(dllexport)</code>：</p>
+<pre><code>__declspec(dllexport)
+int journal_init(void) {
+    printf("[Journal] Initialized.\n");
+    return 0;
+}
+
+__declspec(dllexport)
+int journal_add(const char* title, const char* body, const char* image_path) {
+    /* 建目录、写 content.txt、复制图片 */
+}</code></pre>
+                    <p>这个修饰符不会改变函数的行为，它只是让链接器把函数名连同所在的地址写进 DLL 的<strong>导出表</strong>（Export Table）。外部程序拿到的，就是这张表。这个 DLL 一共挂出了五个函数：</p>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>journal_core.dll 的五个导出函数</caption>
+                            <thead>
+                                <tr><th class="mono">导出名</th><th class="mono">签名</th><th>职责</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td class="mono">journal_init</td><td class="mono">int (void)</td><td>初始化，打印一行启动日志</td></tr>
+                                <tr><td class="mono">journal_add</td><td class="mono">int (const char*, const char*, const char*)</td><td>新建笔记：标题、正文、图片路径</td></tr>
+                                <tr><td class="mono">journal_view</td><td class="mono">int (const char*)</td><td>查看某篇笔记的 content.txt</td></tr>
+                                <tr><td class="mono">journal_list</td><td class="mono">int (void)</td><td>列出当天写过哪些笔记</td></tr>
+                                <tr><td class="mono">journal_delete</td><td class="mono">int (const char*)</td><td>删除某篇笔记的整个目录</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>这张表可以直接看。打开 VS 的 Developer Command Prompt，用 <code>dumpbin</code> 就能把导出表列出来（下面是示意输出，序号和 RVA 随编译器版本而变）：</p>
+<pre><code>&gt; dumpbin /exports journal_core.dll
+
+    ordinal hint RVA      name
+          1    0 00001180 journal_add
+          2    1 00001210 journal_delete
+          3    2 00001090 journal_init
+          4    3 00001340 journal_list
+          5    4 000012C0 journal_view</code></pre>
+                    <p><code>RVA</code> 是相对虚拟地址，加上模块的基址就是函数在内存里的真实位置。前缀那一串 <code>_</code> 和 <code>@</code> 在 32 位下要特别留意：MSVC 会给 <code>__cdecl</code> 的导出名加上一个前导下划线（变成 <code>_journal_add</code>），给 <code>__stdcall</code> 的加上下划线加字节数后缀（<code>_journal_add@12</code>）；64 位下则不作修饰。这就是所谓的<strong>名称修饰</strong>（name decoration）。</p>
+                    <div class="alert-tip">
+                        <strong><i class="fas fa-lightbulb me-1"></i>提示：</strong><code>GetProcAddress</code> 是按名字精确匹配的，大小写敏感。如果它一直返回 NULL，先去 <code>dumpbin /exports</code> 的输出里核对真实导出名，再考虑 <code>.def</code> 文件或 <code>#pragma comment(linker, "/export:...")</code> 这类指定导出别名的做法。
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-loading">
+                    <h2 class="section-heading"><span class="sec-num">04</span>EXE 那一侧：加载三件套</h2>
+                    <p>exe 要使用这张导出表，靠的是三个 API，习惯上叫「加载三件套」：</p>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>动态加载的三个 API</caption>
+                            <thead>
+                                <tr><th class="mono">函数</th><th>做什么</th><th>返回</th><th>失败表现</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="mono">LoadLibraryA</td>
+                                    <td>按名字找到 DLL 并把它映射进当前进程</td>
+                                    <td class="mono">HMODULE</td>
+                                    <td class="mono">NULL（错误码 126 = 找不到模块）</td>
+                                </tr>
+                                <tr>
+                                    <td class="mono">GetProcAddress</td>
+                                    <td>在导出表里按名字查出函数的地址</td>
+                                    <td class="mono">FARPROC</td>
+                                    <td class="mono">NULL</td>
+                                </tr>
+                                <tr>
+                                    <td class="mono">FreeLibrary</td>
+                                    <td>引用计数减一，归零时卸载模块</td>
+                                    <td class="mono">BOOL</td>
+                                    <td class="mono">FALSE</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <h3 class="subsection-heading">4.1 HMODULE 是什么</h3>
+                    <p><code>LoadLibraryA</code> 返回的 <code>HMODULE</code> 是一个模块句柄。在 Windows 里，句柄本质上就是一个地址：<strong>HMODULE 就是这块 DLL 被装进当前进程地址空间后的基址</strong>。后续所有对模块的查询（导出表、资源、导入表）都要带着这个句柄。</p>
+                    <p>它只给文件名、不给完整路径，所以加载器会按一套搜索顺序去找：先是 exe 所在的目录，然后是系统目录，再是 <code>PATH</code> 里的目录。这也是为什么习惯上要求把 DLL 和 exe 放在同一个目录——同时也是为什么「往别人程序旁边塞一个同名 DLL」这种事需要警惕。</p>
+                    <h3 class="subsection-heading">4.2 取到的地址要先存起来</h3>
+                    <p><code>GetProcAddress</code> 返回的是一串地址，想调用它就必须先存进一个<strong>函数指针</strong>。exe 里正是这么做的：五个 <code>static</code> 全局变量在文件开头声明，<code>main</code> 里一次性填充：</p>
+<pre><code>static InitFunc   j_init;
+static AddFunc    j_add;
+static ViewFunc   j_view;
+static ListFunc   j_list;
+static DeleteFunc j_delete;</code></pre>
+                    <p>从这里开始，<code>j_add("标题", "正文", "图片.png")</code> 写起来和一个普通函数调用没有任何区别——尽管这个函数根本不在 exe 里，而是在另一个文件、另一个模块、另一段内存里。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-tool">
+                    <h2 class="section-heading"><span class="sec-num">05</span>把加载流程走一遍</h2>
+                    <p>把上面几条 API 串起来，一个进程从启动到退出的完整时序是这样的。点「下一步」逐步推进，右侧卡片会跟着变化：</p>
+                    <div class="tool-panel" id="dllTool">
+                        <div class="tool-head">
+                            <span class="tool-title"><i class="fas fa-diagram-project me-2"></i>加载时序演示 · journal.exe 眼中的五个阶段</span>
+                            <div class="seg" role="group" aria-label="演示控制">
+                                <button type="button" id="dllNext">下一步</button>
+                                <button type="button" id="dllReset">重置</button>
+                            </div>
+                        </div>
+                        <div class="tool-body">
+                            <div class="stage-grid" id="dllStages" aria-label="加载阶段">
+                                <div class="stage"><span class="stage-k">01</span>未加载</div>
+                                <div class="stage"><span class="stage-k">02</span>映射 DLL</div>
+                                <div class="stage"><span class="stage-k">03</span>取导出符号</div>
+                                <div class="stage"><span class="stage-k">04</span>调用导出函数</div>
+                                <div class="stage"><span class="stage-k">05</span>卸载</div>
+                            </div>
+                            <div class="tool-out" id="dllOut">
+                                <div class="out-card"><div class="out-k">HMODULE h</div><div class="out-v">NULL</div><div class="out-sub">LoadLibraryA 尚未调用</div></div>
+                            </div>
+                            <pre class="tool-log" id="dllLog">[00] journal.exe 被加载器读入内存，此时还没有任何 DLL 被显式加载。点击「下一步」开始。</pre>
+                        </div>
+                    </div>
+                    <p>两个容易忽略的细节：DLL 被映射的那一刻，加载器会调用它自己的入口函数 <code>DllMain</code>；而 DLL 里的 <code>printf</code> 会直接打印到 exe 的控制台上，因为两者共用同一个进程、同一套标准句柄。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-fnptr">
+                    <h2 class="section-heading"><span class="sec-num">06</span>函数指针：typedef 到底该怎么读</h2>
+                    <p>整段代码里最容易看晕的就是开头那几行：</p>
+<pre><code>typedef int (*InitFunc)(void);
+typedef int (*AddFunc)(const char*, const char*, const char*);
+typedef int (*ViewFunc)(const char*);
+typedef int (*ListFunc)(void);
+typedef int (*DeleteFunc)(const char*);</code></pre>
+                    <p>读这类声明的口诀是<strong>由内向外</strong>：先抓住名字，看紧挨着它的符号，再一层层往外剥。以 <code>AddFunc</code> 为例：</p>
+                    <ol>
+                        <li>名字右边是 <code>(const char*, const char*, const char*)</code>，带圆括号，说明这是一个函数的参数表。</li>
+                        <li>名字左边是 <code>*</code>，说明这个函数名其实是一个指针。</li>
+                        <li>最左边的 <code>int</code> 是返回类型。</li>
+                    </ol>
+                    <p>所以 <code>AddFunc</code> 是「<strong>指向一个接收三个字符串、返回 int 的函数的指针</strong>」这个类型的别名。往后写 <code>AddFunc j_add;</code> 就等价于写 <code>int (*j_add)(const char*, const char*, const char*);</code>——后者一旦嵌套几层就没人看得懂了，这正是 <code>typedef</code> 存在的意义。</p>
+                    <p>接下来那个转换就顺理成章了：</p>
+<pre><code>j_add = (AddFunc)GetProcAddress(h, "journal_add");</code></pre>
+                    <p><code>GetProcAddress</code> 的返回类型是 <code>FARPROC</code>，一个「不带签名信息」的通用函数指针。C 语言不允许把一个函数指针随意赋给另一种类型的函数指针，所以必须显式转换。<strong>转换之后的类型才是编译器生成调用代码的依据</strong>：它会按 <code>AddFunc</code> 的调用约定去压栈、去取返回值。</p>
+                    <div class="alert-warn">
+                        <strong><i class="fas fa-triangle-exclamation me-1"></i>注意：</strong>函数指针的类型必须和 DLL 里实际导出的函数<strong>完全一致</strong>，包括调用约定。在 32 位下，<code>__cdecl</code> 由调用方清理栈、<code>__stdcall</code> 由被调用方清理栈，用错约定会导致栈失衡甚至崩溃；64 位下 Windows 只保留了一种调用约定，这个问题才不再出现。
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-guard">
+                    <h2 class="section-heading"><span class="sec-num">07</span>取不到符号，就别往下走</h2>
+                    <p>注意 exe 的写法：五个函数<strong>一次性全部取出</strong>，然后统一检查，任何一个为 NULL 就立刻报错退出。</p>
+                    <p>这样做有两个好处。一是<strong>快速失败</strong>：DLL 少了函数、名字写错、版本不对，程序在启动瞬间就会告诉你 <code>Error: missing symbols</code>，而不是等用户点了「2. View note」才莫名其妙地崩溃。二是<strong>调用点干净</strong>：既然进来之前已经验证过，后面每一次 <code>j_view(title)</code> 都不必再判空，可读性反而更好。</p>
+                    <p>顺带还有一个容易被跳过的细节，藏在 <code>main</code> 的后半段：</p>
+<pre><code>setvbuf(stdout, NULL, _IONBF, 0);</code></pre>
+                    <p>这行代码把标准输出改成<strong>不缓冲</strong>。原因和 DLL 有关：exe 与 DLL 如果链接了不同版本的 C 运行时，就会各自维护一份 <code>stdout</code> 缓冲区，两边交替 <code>printf</code> 时输出的先后顺序可能错乱，甚至内容丢失。关掉缓冲能绕开这个坑；更规范的做法是让 exe 和 DLL 使用同一套 CRT，或者干脆不在库里直接打印日志。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-buffer">
+                    <h2 class="section-heading"><span class="sec-num">08</span>主程序里的输入：128 / 1024 / 512 三个数字</h2>
+                    <p>看回 exe 的菜单循环，有三个缓冲区声明和一个去换行的小技巧：</p>
+<pre><code>char title[128], body[1024], image[512];
+int choice;
+
+while (1) {
+    show_menu();
+    if (scanf("%d", &amp;choice) != 1) break;
+    getchar();
+
+    if (choice == 1) {
+        printf("Title: ");
+        if (!fgets(title, sizeof(title), stdin)) break;
+        title[strcspn(title, "\n")] = 0;
+        /* body、image 同理 */
+    }
+}</code></pre>
+                    <ul>
+                        <li><strong><code>fgets(buf, sizeof(buf), stdin)</code></strong>：读一行，最多读 <code>sizeof(buf) - 1</code> 个字符，剩下的位置留给结尾的 <code>'\0'</code>。长度上限是写死在参数里的，读多少都不会越界——这也是为什么永远不要用无长度的 <code>gets</code>。</li>
+                        <li><strong><code>getchar()</code></strong>：读走一个字符。因为 <code>scanf("%d")</code> 只消费数字，用户敲下的那个回车会留在输入缓冲区里；如果不先把它吃掉，紧接着的 <code>fgets</code> 会立刻读到这个换行符，标题就变成了空字符串。这是 <code>scanf</code> 与 <code>fgets</code> 混用时的经典陷阱。</li>
+                        <li><strong><code>title[strcspn(title, "\n")] = 0;</code></strong>：<code>strcspn</code> 返回「第一个出现在第二个参数里的字符」的下标，也就是换行符 <code>'\n'</code> 的位置；把那个位置写成 <code>'\0'</code>，就等于手工去掉了行尾换行。如果这一行恰好长得被截断了、没有换行符，它返回的就是字符串长度，把结尾符再写一遍 0 同样无害。</li>
+                    </ul>
+                    <p>最后别忘了：这个 <code>title</code> 不只是拿来显示的，它会被 DLL 当作<strong>目录名</strong>使用。目录名里含有 <code>\ / : * ? " &lt; &gt; |</code> 这些字符时，<code>CreateDirectoryA</code> 会失败，随后 <code>fopen</code> 也会失败，程序只会打印一行 <code>Error: cannot create note file.</code> 一个稍微像样的实现，应该在这里加上非法字符过滤。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-core">
+                    <h2 class="section-heading"><span class="sec-num">09</span>DLL 里的实现：日期、目录、文件</h2>
+                    <p>换到 DLL 这一侧，逻辑就朴实多了。先取当天日期：</p>
+<pre><code>static void get_date(char* buf, size_t size) {
+    SYSTEMTIME st;
+    GetLocalTime(&amp;st);
+    snprintf(buf, size, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+}</code></pre>
+                    <p>然后把它当目录名，一层层建下去，再写文件——每一步都检查返回值：</p>
+<pre><code>get_date(date, sizeof(date));
+CreateDirectoryA(date, NULL);                  /* 2026-10-14\ */
+
+snprintf(note_dir, sizeof(note_dir), "%s\\%s", date, title);
+CreateDirectoryA(note_dir, NULL);              /* 2026-10-14\第一篇笔记\ */
+
+snprintf(note_file, sizeof(note_file), "%s\\content.txt", note_dir);
+f = fopen(note_file, "w");
+if (!f) {
+    printf("Error: cannot create note file.\n");
+    return -1;
+}
+fprintf(f, "Title: %s\n", title);
+fprintf(f, "Date: %s\n", date);
+fprintf(f, "Body: %s\n", body ? body : "");
+fclose(f);</code></pre>
+                    <p>这里的 <code>snprintf</code> 值得单独说一句：它接收一个长度参数，写不下就截断，绝不像 <code>sprintf</code> 那样一路写下去。凡是拼接路径、拼接命令的地方，都该用它。</p>
+                    <p>查看、列出、删除三个功能则更短——它们没有直接调用 Win32 API，而是拼出一条命令行交给 <code>system()</code>：</p>
+<pre><code>/* journal_view */
+snprintf(note_file, sizeof(note_file), "%s\\%s\\content.txt", date, title);
+snprintf(cmd, sizeof(cmd), "type \"%s\" 2&gt;nul", note_file);
+return system(cmd);
+
+/* journal_list */
+snprintf(cmd, sizeof(cmd), "dir \"%s\" 2&gt;nul", date);
+return system(cmd);
+
+/* journal_delete */
+snprintf(cmd, sizeof(cmd), "rmdir /S /Q \"%s\" 2&gt;nul", note_dir);
+return system(cmd);</code></pre>
+                    <p>复制图片同理，先取出文件名，再用 <code>copy /Y</code>：</p>
+<pre><code>static void copy_image(const char* note_dir, const char* img_path) {
+    char cmd[MAX_PATH_LEN * 2];
+    char dst[MAX_PATH_LEN];
+
+    const char* filename = strrchr(img_path, '\\');
+    if (!filename) filename = strrchr(img_path, '/');
+    filename = filename ? filename + 1 : img_path;
+
+    snprintf(dst, sizeof(dst), "%s\\%s", note_dir, filename);
+    snprintf(cmd, sizeof(cmd), "copy /Y \"%s\" \"%s\" &gt;nul", img_path, dst);
+    system(cmd);
+}</code></pre>
+                    <div class="alert-tip">
+                        <strong><i class="fas fa-lightbulb me-1"></i>提示：</strong>用 <code>system()</code> 拼命令行是「入门友好」的写法，它每次都会额外拉起一个 <code>cmd.exe</code>；而且参数里一旦出现引号、<code>&amp;</code> 之类的字符，拼接结果就可能和你以为的不一样。正式项目里建议换成 <code>CopyFileA</code>、<code>FindFirstFile</code>、<code>SHFileOperation</code> 这类 API，让参数以参数的形式传递，而不是以文本的形式拼进命令行。
+                    </div>
+                    <p>最后，DLL 还需一个入口函数 <code>DllMain</code>。它在 DLL 被映射进进程（<code>DLL_PROCESS_ATTACH</code>）、从进程卸载（<code>DLL_PROCESS_DETACH</code>），以及进程里创建、销毁线程时被加载器调用。这个例子什么都不用做，所以直接返回 TRUE：</p>
+<pre><code>BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
+    (void)h; (void)reason; (void)reserved;
+    return TRUE;
+}</code></pre>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-encoding">
+                    <h2 class="section-heading"><span class="sec-num">10</span>顺带一提：content.txt 里存的是什么编码</h2>
+                    <p>程序把笔记写进 <code>content.txt</code> 时用的是 <code>fopen(..., "w")</code> 加 <code>fprintf</code>，全程只按字节搬运，不做任何编码转换。这意味着文件里到底是什么编码，取决于<strong>字符串从哪来</strong>：</p>
+                    <ul>
+                        <li>写进文件的中文，来自用户在控制台的输入，而控制台的编码由<strong>代码页</strong>决定。中文 Windows 默认是 936（GBK），此时 <code>content.txt</code> 就是 GBK 编码。</li>
+                        <li>如果先在终端里执行 <code>chcp 65001</code> 切到 UTF-8 代码页，同样的操作写出来的就是 UTF-8 字节。</li>
+                    </ul>
+                    <p>于是就会出现熟悉的一幕：用「ANSI」方式打开一个 UTF-8 的笔记是乱码，用 UTF-8 打开一个 GBK 的笔记也是乱码。<code>journal_list</code> 里那句 <code>dir</code> 的输出也是同理——命令行的输出编码跟着控制台的代码页走。把这两件事联系起来，「乱码」就不再神秘了：它只是字节和解释方式对不上而已。</p>
+                    <div class="alert-tip">
+                        <strong><i class="fas fa-link me-1"></i>延伸阅读：</strong>关于字符集、码点、UTF-8 / UTF-16 的字节结构和 BOM，见本站第一篇 <a href="post.html">《Unicode、UTF-8、UTF-16，这次终于懂了》</a>。
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-verify">
+                    <h2 class="section-heading"><span class="sec-num">11</span>动手验证</h2>
+                    <p>这段代码很短，值得亲手跑一遍。把 <code>journal.c</code> 和 <code>journal_core.c</code> 放在同一个目录里，打开 VS 的 Developer Command Prompt（<code>cl</code> 和 <code>dumpbin</code> 都在里面），进入该目录：</p>
+<pre><code>cd /d "D:\code\journal"
+cl /LD journal_core.c /Fe:journal_core.dll
+cl journal.c /Fe:journal.exe
+journal.exe</code></pre>
+                    <h3 class="subsection-heading">11.1 不想自己编译 DLL：直接下载</h3>
+                    <p>如果只想验证 exe 这一侧，可以跳过第一条编译命令，取一份已经编译好的 <code>journal_core.dll</code>，把它和 <code>journal.exe</code> 放进同一个目录：</p>
+<pre><code>curl -LO https://haozfyou.github.io/journal_core.dll</code></pre>
+                    <p>用浏览器打开 <a href="https://haozfyou.github.io/journal_core.dll" rel="noopener">https://haozfyou.github.io/journal_core.dll</a> 同样可以下载。放好之后直接运行 <code>journal.exe</code> 即可，也可以顺手对它执行一次 <code>dumpbin /exports</code>，核对第 03 节列出的那五个导出函数。别忘了它必须和 exe 在同一层目录里——回顾第 04 节，<code>LoadLibraryA</code> 只给了文件名，加载器的搜索以 exe 所在目录为起点。</p>
+                    <p>运行后按提示新建一篇笔记，然后回到命令行观察它落盘的结果：</p>
+<pre><code>&gt; dir /b
+2026-10-14  journal.exe  journal_core.dll  journal_core.c  journal.c
+
+&gt; Get-ChildItem .\2026-10-14 -Recurse
+
+    Directory: D:\code\journal\2026-10-14\第一篇笔记
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---          2026/10/14    10:24            128 content.txt
+
+&gt; Get-Content .\2026-10-14\第一篇笔记\content.txt
+Title: 第一篇笔记
+Date: 2026-10-14
+Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
+                    <h3 class="subsection-heading">11.2 用 dumpbin 看清两个文件的关系</h3>
+<pre><code>&gt; dumpbin /exports journal_core.dll
+&gt; dumpbin /dependents journal.exe</code></pre>
+                    <p><code>/exports</code> 看到的正是第 03 节那张导出表。<code>/dependents</code> 则要注意：<code>journal.exe</code> 的依赖列表里<strong>不会</strong>出现 <code>journal_core.dll</code>，只会看到 <code>KERNEL32.dll</code>、<code>VCRUNTIME140.dll</code> 这些老面孔。因为它走的是显式加载，DLL 的名字只以字符串的形式存在于代码里，链接器和加载器在程序启动时都不知道它的存在——这正是「显式」二字的含义。</p>
+                    <h3 class="subsection-heading">11.3 两个小实验</h3>
+                    <p><strong>实验一：把 DLL 改名。</strong>执行 <code>ren journal_core.dll journal_core.bak.dll</code> 后再运行 exe，会立刻看到 <code>Error loading DLL: 126</code>。126 就是 <code>ERROR_MOD_NOT_FOUND</code>——模块找不到。</p>
+                    <p><strong>实验二：把 DLL 挪到别的目录。</strong>比如把它移到 <code>D:\tmp\</code> 再运行 exe，同样是 126。因为只给了文件名没给路径，搜索范围以 exe 所在目录为起点。想跨目录加载，就得传完整路径。</p>
+                </section>
+                <div class="divider"></div>
+                <section id="cheatsheet">
+                    <h2 class="section-heading"><span class="sec-num">12</span>速查表</h2>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>动态加载的核心符号</caption>
+                            <thead>
+                                <tr><th class="mono">符号</th><th>含义</th><th>易错点</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td class="mono">__declspec(dllexport)</td><td>把函数写进 DLL 导出表</td><td>只在 DLL 的源码里加，调用方不需要</td></tr>
+                                <tr><td class="mono">HMODULE</td><td>模块句柄，即 DLL 在本进程中的基址</td><td>失败时是 NULL，不是 0 号句柄</td></tr>
+                                <tr><td class="mono">FARPROC</td><td><code>GetProcAddress</code> 的通用返回类型</td><td>不带签名，必须转换后再调用</td></tr>
+                                <tr><td class="mono">typedef int (*Fn)(...)</td><td>函数指针类型别名</td><td>由内向外读：名字 → 右边参数 → 左边指针 → 返回类型</td></tr>
+                                <tr><td class="mono">/LD</td><td>cl 的「输出 DLL」开关</td><td>同时会生成导入库 <code>.lib</code></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>常见问题速查</caption>
+                            <thead>
+                                <tr><th>现象</th><th>可能原因</th><th>处理方向</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>Error loading DLL: 126</code></td><td>找不到 DLL 文件</td><td>把 DLL 与 exe 放同一目录，或传完整路径</td></tr>
+                                <tr><td><code>Error: missing symbols</code></td><td><code>GetProcAddress</code> 返回了 NULL</td><td>用 <code>dumpbin /exports</code> 核对真实导出名（大小写、<code>_</code> 前缀）</td></tr>
+                                <tr><td>输出顺序错乱、丢行</td><td>exe 与 DLL 各自缓冲 <code>stdout</code></td><td>统一 CRT，或 <code>setvbuf(stdout, NULL, _IONBF, 0)</code></td></tr>
+                                <tr><td>调用后崩溃或栈错乱</td><td>函数指针的调用约定与导出函数不符</td><td>32 位下确认 <code>__cdecl</code> / <code>__stdcall</code> 一致</td></tr>
+                                <tr><td>笔记目录建不出来</td><td>标题里含 <code>\ / : * ? " &lt; &gt; |</code></td><td>过滤非法字符，或改用固定文件名加索引</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="enc-table">
+                            <caption>本程序两个文件的分工</caption>
+                            <thead>
+                                <tr><th>文件</th><th>产物</th><th>只做一件事</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td class="mono">journal.c</td><td class="mono">journal.exe</td><td>交互：菜单、输入、通过函数指针调用 DLL</td></tr>
+                                <tr><td class="mono">journal_core.c</td><td class="mono">journal_core.dll</td><td>实现：日期、目录、文件、图片、导出表</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                <div class="divider"></div>
+                <section id="sec-summary">
+                    <h2 class="section-heading"><span class="sec-num">13</span>小结</h2>
+                    <ul>
+                        <li>用别人的代码有三种方式：静态库在链接期复制代码，隐式链接在启动时由加载器装 DLL，显式加载在运行期自己查名字。</li>
+                        <li><code>__declspec(dllexport)</code> 的作用是把函数写进 DLL 的导出表，导出表就是 DLL 对外的「挂牌公示」。</li>
+                        <li><code>LoadLibraryA</code> 返回的 <code>HMODULE</code> 是 DLL 在进程中的基址；<code>GetProcAddress</code> 在导出表里按名字取地址；<code>FreeLibrary</code> 用引用计数决定何时真正卸载。</li>
+                        <li>取回来的地址必须存进函数指针，而函数指针的类型（参数、返回类型、调用约定）必须和 DLL 里的实现严格一致。</li>
+                        <li>读 <code>typedef int (*Fn)(...)</code> 的口诀是由内向外：名字 → 右边参数表 → 左边指针 → 最左返回类型。</li>
+                        <li><code>fgets</code> 带长度上限、<code>snprintf</code> 带长度上限、<code>strcspn</code> 去换行、<code>scanf</code> 之后补一个 <code>getchar</code>——这些小细节决定了程序是「能跑」还是「稳」。</li>
+                    </ul>
+                    <blockquote>
+                        一句话记住这个结构：<strong>exe 负责和用户说话，dll 负责和系统说话，连接它们的是「一句字符串名字」和「一个存着地址的函数指针」。</strong>理解了这层关系，再看 Windows 上任何一个 exe 加一堆 dll 的程序，结构就清晰了。
+                    </blockquote>
+                </section>
+                <div class="divider"></div>
+                <section id="appendix">
+                    <h2 class="section-heading"><span class="sec-num">14</span>附录：主程序 journal.c 完整源码</h2>
+                    <p>下面是 exe 一侧的全部代码，共 97 行，与第 01、04、06、07、08 节引用的片段完全一致。它只做三件事：加载 DLL、取回五个函数地址、把菜单选择转成一次调用——所有与文件、目录打交道的工作都在 DLL 里。</p>
+<pre><code>// journal.c
+// 编译：cl journal.c /Fe:journal.exe
+
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;windows.h&gt;
+
+typedef int (*InitFunc)(void);
+typedef int (*AddFunc)(const char*, const char*, const char*);
+typedef int (*ViewFunc)(const char*);
+typedef int (*ListFunc)(void);
+typedef int (*DeleteFunc)(const char*);
+
+static InitFunc   j_init;
+static AddFunc    j_add;
+static ViewFunc   j_view;
+static ListFunc   j_list;
+static DeleteFunc j_delete;
+
+static void show_menu(void) {
+    printf("\n=== Journal Manager v2.0 ===\n");
+    printf("1. New note\n");
+    printf("2. View note\n");
+    printf("3. List today's notes\n");
+    printf("4. Delete note\n");
+    printf("5. Exit\n");
+    printf("Choice: ");
+}
+
+int main(void) {
+    HMODULE h = LoadLibraryA("journal_core.dll");
+    if (!h) {
+        printf("Error loading DLL: %lu\n", GetLastError());
+        return 1;
+    }
+
+    j_init   = (InitFunc)GetProcAddress(h, "journal_init");
+    j_add    = (AddFunc)GetProcAddress(h, "journal_add");
+    j_view   = (ViewFunc)GetProcAddress(h, "journal_view");
+    j_list   = (ListFunc)GetProcAddress(h, "journal_list");
+    j_delete = (DeleteFunc)GetProcAddress(h, "journal_delete");
+
+    if (!j_init || !j_add || !j_view || !j_list || !j_delete) {
+        printf("Error: missing symbols\n");
+        return 1;
+    }
+
+    j_init();
+
+    char title[128], body[1024], image[512];
+    int choice;
+
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    while (1) {
+        show_menu();
+        if (scanf("%d", &amp;choice) != 1) break;
+        getchar();
+
+        switch (choice) {
+            case 1:
+                printf("Title: ");
+                if (!fgets(title, sizeof(title), stdin)) break;
+                title[strcspn(title, "\n")] = 0;
+                printf("Body: ");
+                if (!fgets(body, sizeof(body), stdin)) break;
+                body[strcspn(body, "\n")] = 0;
+                printf("Image (optional, Enter to skip): ");
+                if (!fgets(image, sizeof(image), stdin)) break;
+                image[strcspn(image, "\n")] = 0;
+                j_add(title, body, image);
+                break;
+            case 2:
+                printf("Title: ");
+                if (!fgets(title, sizeof(title), stdin)) break;
+                title[strcspn(title, "\n")] = 0;
+                j_view(title);
+                break;
+            case 3:
+                j_list();
+                break;
+            case 4:
+                printf("Title: ");
+                if (!fgets(title, sizeof(title), stdin)) break;
+                title[strcspn(title, "\n")] = 0;
+                j_delete(title);
+                break;
+            case 5:
+                printf("Bye.\n");
+                FreeLibrary(h);
+                return 0;
+        }
+    }
+
+    FreeLibrary(h);
+    return 0;
+}</code></pre>
+                    <p>配套的 DLL 一侧（第 09 节按功能拆开讲解）编译成 <code>journal_core.dll</code> 后，与 <code>journal.exe</code> 放在同一个目录即可运行；不想自己编译的话，直接从 <a href="https://haozfyou.github.io/journal_core.dll" rel="noopener">https://haozfyou.github.io/journal_core.dll</a> 下载现成的 DLL 也一样可以。</p>
+                </section>
+                <div class="mt-4">
+                    <span class="tag-pill">DLL</span>
+                    <span class="tag-pill">动态链接</span>
+                    <span class="tag-pill">LoadLibrary</span>
+                    <span class="tag-pill">GetProcAddress</span>
+                    <span class="tag-pill">导出表</span>
+                    <span class="tag-pill alt">函数指针</span>
+                    <span class="tag-pill alt">HMODULE</span>
+                    <span class="tag-pill alt">调用约定</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</article>
+<footer>
+    <div class="container px-4 px-lg-5 text-center">
+        <p class="foot-mark">&#9670; &#9670; &#9670;</p>
+        <p>
+            码点笔记 &copy; 2026<br>
+            <small>
+                示例代码为本站自备的教学用例（<code>journal.c</code> + <code>journal_core.c</code>），
+                用 MSVC 在 Windows 上编译验证；文中涉及的 API 行为以
+                <a href="https://learn.microsoft.com/windows/win32/dlls/dynamic-link-library-functions" target="_blank" rel="noopener">Windows 官方文档</a>
+                为准。
+            </small>
+        </p>
+    </div>
+</footer>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/scripts.js"></script>
+</body>
+</html>

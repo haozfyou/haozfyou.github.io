@@ -26,7 +26,8 @@
         <div class="collapse navbar-collapse" id="navbarResponsive">
             <ul class="navbar-nav ms-auto py-4 py-lg-0">
                 <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="index.html">首页</a></li>
-                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post.html">科普正文</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post.html">编码科普</a></li>
+                <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post2.html">DLL 科普</a></li>
                 <li class="nav-item"><a class="nav-link px-lg-3 py-3 py-lg-4" href="post.html#cheatsheet">速查表</a></li>
             </ul>
         </div>
@@ -72,6 +73,29 @@
                     并附上可以动手换算的小工具和速查表。
                 </p>
                 <a class="read-more" href="post.html">阅读全文 <i class="fas fa-arrow-right ms-1" style="font-size:.75rem;"></i></a>
+            </div>
+
+            <div class="post-preview">
+                <a href="post2.html">
+                    <h2 class="post-title">exe 与 dll：一个记事本程序为什么要拆成两半</h2>
+                    <h3 class="post-subtitle">
+                        从 journal.exe 与 journal_core.dll 出发，讲清导出表、加载三件套与函数指针
+                    </h3>
+                </a>
+                <p class="post-meta">
+                    2026 年 10 月 &nbsp;·&nbsp; 约 16 分钟
+                    &nbsp;·&nbsp;
+                    <span class="tag-pill">DLL</span>
+                    <span class="tag-pill">动态链接</span>
+                    <span class="tag-pill alt">函数指针</span>
+                </p>
+                <p>
+                    一个两百多行的记事本小程序，为什么要把源代码拆成两个文件、编译成一个 exe 加一个 dll？
+                    这篇从一个只有几十行的 <code>main</code> 出发，讲清导出表、
+                    <code>LoadLibraryA</code> / <code>GetProcAddress</code> / <code>FreeLibrary</code> 三件套、
+                    <code>typedef</code> 函数指针的读法，以及与第一篇遥相呼应的写文件编码问题。
+                </p>
+                <a class="read-more" href="post2.html">阅读全文 <i class="fas fa-arrow-right ms-1" style="font-size:.75rem;"></i></a>
             </div>
 
             <hr style="border-color:#dfe6e3; margin:1.5rem 0;">

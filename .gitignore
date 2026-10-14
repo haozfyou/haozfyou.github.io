@@ -1,7 +1,7 @@
 # ==========================================================
 # GitHub Pages 只发布静态站点本体
 #
-#   放行：index.html / post.html / css/ / js/
+#   放行：index.html / post.html / post2.html / css/ / js/ / journal_core.dll
 #   其余一切文件默认不提交，包括：
 #     谜底.txt  Voucher_Code.txt  moji_cipher.txt  puzzle_cipher.txt  gift
 #     verify.py  xor_cipher.py  xor_cipher.ps1
@@ -15,9 +15,13 @@
 # 2) 只放行站点本体
 !/index.html
 !/post.html
+!/post2.html
 !/css/
 !/js/
 !/gift
+# 第二篇正文里提供了这个 DLL 的下载链接，需要在仓库根目录放一份编译好的副本
+!/journal_core.dll
+!/journal.exe
 
 # 3) 放行 git 与 GitHub Pages 自身需要的配置文件
 !/.gitignore

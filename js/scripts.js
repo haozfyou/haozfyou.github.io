@@ -165,3 +165,113 @@ window.addEventListener('DOMContentLoaded', () => {
         update();
     });
 })();
+
+/* ---------- 交互演示：DLL 加载时序 ---------- */
+(function () {
+    const BASE = 0x00007FF8A2C00000;
+    const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(12, '0');
+
+    // stage 指向 stage-grid 里被点亮的阶段（0 起）；RVA 只是示意值
+    const steps = [
+        {
+            stage: 0,
+            name: '未加载',
+            hm: 'NULL',
+            add: 'NULL',
+            ref: 0,
+            log: 'journal.exe 被加载器读入内存，控制权交给 CRT 的启动代码。此时虚拟地址空间里还没有 journal_core.dll，五个函数指针都是未初始化的空值。'
+        },
+        {
+            stage: 1,
+            name: 'LoadLibraryA("journal_core.dll")',
+            hm: hex(BASE),
+            add: 'NULL',
+            ref: 1,
+            log: '加载器按搜索顺序找到 journal_core.dll，把它映射进本进程地址空间，并调用它的入口函数 DllMain(DLL_PROCESS_ATTACH)。返回的 HMODULE 就是模块基址，引用计数变成 1。'
+        },
+        {
+            stage: 2,
+            name: 'GetProcAddress × 5',
+            hm: hex(BASE),
+            add: hex(BASE + 0x1210),
+            ref: 1,
+            log: '加载器在导出表里按名字逐个查到地址，写进五个函数指针：journal_init / journal_add / journal_view / journal_list / journal_delete。名字大小写敏感，查不到就返回 NULL。'
+        },
+        {
+            stage: 3,
+            name: 'j_init()',
+            hm: hex(BASE),
+            add: hex(BASE + 0x1210),
+            ref: 1,
+            log: '[Journal] Initialized. —— 这行字由 DLL 里的 printf 打印，却出现在 exe 的控制台上：两者共用同一个进程和同一套标准句柄。'
+        },
+        {
+            stage: 3,
+            name: '菜单循环：j_add / j_view / j_list / j_delete',
+            hm: hex(BASE),
+            add: hex(BASE + 0x1210),
+            ref: 1,
+            log: '用户每选一次菜单，exe 就通过函数指针调进 DLL：建目录、写 content.txt、复制图片、用 dir / type 展示结果。exe 自己一行文件操作代码都没有。'
+        },
+        {
+            stage: 4,
+            name: 'FreeLibrary(h)',
+            hm: '已释放',
+            add: '已失效',
+            ref: 0,
+            log: 'FreeLibrary 把引用计数减到 0，加载器调用 DllMain(DLL_PROCESS_DETACH) 并解除映射。此后再用旧的函数指针去调用就是未定义行为。'
+        }
+    ];
+
+    window.addEventListener('DOMContentLoaded', () => {
+        const panel = document.getElementById('dllTool');
+        if (!panel) return;
+
+        const stages = panel.querySelectorAll('.stage');
+        const out = panel.querySelector('#dllOut');
+        const log = panel.querySelector('#dllLog');
+        const next = panel.querySelector('#dllNext');
+        const reset = panel.querySelector('#dllReset');
+        let index = 0;
+        const lines = [];
+
+        const card = (key, value, sub, isErr) =>
+            '<div class="out-card' + (isErr ? ' err' : '') + '"><div class="out-k">' + key +
+            '</div><div class="out-v">' + value + '</div><div class="out-sub">' + sub + '</div></div>';
+
+        function render() {
+            const s = steps[index];
+
+            stages.forEach((el, n) => {
+                el.classList.toggle('on', n === s.stage);
+                el.classList.toggle('done', n < s.stage);
+            });
+
+            out.innerHTML =
+                card('当前阶段', s.name, '第 ' + (index + 1) + ' / ' + steps.length + ' 步') +
+                card('HMODULE h', s.hm, s.hm === 'NULL' || s.hm === '已释放' ? 'DLL 不在本进程中' : '模块在进程中的基址') +
+                card('j_add', s.add, s.add === 'NULL' ? '尚未取到地址' : 'GetProcAddress 取回的地址') +
+                card('引用计数', String(s.ref), s.ref === 0 ? '引用为 0 即卸载' : 'DLL 已驻留本进程');
+
+            lines.push('[' + String(index).padStart(2, '0') + '] ' + s.log);
+            log.textContent = lines.join('\n\n');
+            log.scrollTop = log.scrollHeight;
+
+            next.disabled = index === steps.length - 1;
+            next.setAttribute('aria-disabled', String(next.disabled));
+        }
+
+        next.addEventListener('click', () => {
+            if (index < steps.length - 1) { index += 1; render(); }
+        });
+
+        reset.addEventListener('click', () => {
+            index = 0;
+            lines.length = 0;
+            log.textContent = '';
+            render();
+        });
+
+        render();
+    });
+})();

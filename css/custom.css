@@ -287,3 +287,26 @@ footer .foot-mark { color: var(--jade); letter-spacing: 5px; margin-bottom: .5re
     background: var(--amber-050);
     color: var(--ink);
 }
+
+/* ---------- 交互演示：DLL 加载时序 ---------- */
+.stage-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: .5rem; margin-bottom: .8rem;
+}
+.stage {
+    border: 1px solid var(--line); border-radius: 4px; background: #fbfdfc;
+    padding: .5rem .6rem; font-size: .8rem; line-height: 1.5; color: var(--muted);
+}
+.stage .stage-k {
+    display: block; font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: .7rem; color: #9aa9a5; font-weight: 700;
+}
+.stage.done { border-color: #bfe0d9; color: var(--ink-2); }
+.stage.done .stage-k { color: var(--jade); }
+.stage.on { border-color: var(--jade); background: var(--jade-050); color: var(--ink); }
+.stage.on .stage-k { color: var(--rose); }
+.tool-panel .tool-log {
+    margin: 0; min-height: 7rem; max-height: 12rem; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word; font-size: .78rem;
+}
+.seg button:disabled { color: #b9c6c3; cursor: default; }
