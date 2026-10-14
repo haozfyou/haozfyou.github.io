@@ -490,6 +490,7 @@ Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
                 <section id="appendix">
                     <h2 class="section-heading"><span class="sec-num">14</span>附录：主程序 journal.c 完整源码</h2>
                     <p>下面是 exe 一侧的全部代码，共 97 行，与第 01、04、06、07、08 节引用的片段完全一致。它只做三件事：加载 DLL、取回五个函数地址、把菜单选择转成一次调用——所有与文件、目录打交道的工作都在 DLL 里。</p>
+                    <p class="egg-hint">你可以直接在桌面或者temp里按代码直接构建这个文件，方便学习</p>
 <pre><code>// journal.c
 // 编译：cl journal.c /Fe:journal.exe
 
