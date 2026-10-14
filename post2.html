@@ -62,10 +62,10 @@
                         <li><code>journal.c</code>：约 100 行，只负责和用户打交道——画菜单、读键盘输入、把用户的意图转成一次函数调用。</li>
                         <li><code>journal_core.c</code>：约 140 行，负责真正干活——取日期、建目录、写文件、复制图片、列出目录。</li>
                     </ul>
-                    <p>两条编译命令，就得到了两个产物：</p>
-<pre><code>cl /LD journal_core.c /Fe:journal_core.dll
-cl journal.c /Fe:journal.exe</code></pre>
-                    <p><code>/LD</code> 告诉编译器输出一个动态链接库。于是 <code>journal_core.c</code> 变成了 <code>journal_core.dll</code>；<code>journal.c</code> 则变成一个体积很小的可执行文件，因为它自己一行文件操作代码都没有。</p>
+                    <p>用 MinGW-w64 的 <code>gcc</code>，两条命令就得到了两个产物：</p>
+<pre><code>gcc -shared -o journal_core.dll journal_core.c
+gcc -o journal.exe journal.c</code></pre>
+                    <p><code>-shared</code> 告诉 gcc 输出一个动态链接库。于是 <code>journal_core.c</code> 变成了 <code>journal_core.dll</code>；<code>journal.c</code> 则变成一个只有几十 KB 的可执行文件，因为它自己一行文件操作代码都没有。</p>
                     <p>运行时，程序会按「日期 / 标题」的层级把笔记存到磁盘上：</p>
 <pre><code>2026-10-14\
 └── 第一篇笔记\
@@ -111,7 +111,7 @@ Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
                             </thead>
                             <tbody>
                                 <tr>
-                                    <td>静态库（<code>.lib</code>）</td>
+                                    <td>静态库（<code>lib*.a</code>）</td>
                                     <td>编译链接期</td>
                                     <td>目标代码被复制进 exe，只需交付一个文件</td>
                                     <td>基础算法库、只在一个程序里用的工具函数</td>
@@ -119,7 +119,7 @@ Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
                                 <tr>
                                     <td>DLL + 隐式链接</td>
                                     <td>进程启动时由加载器自动完成</td>
-                                    <td>exe 里只留一张「导入表」，运行时靠 <code>.lib</code> 导入库对上的名字去找 DLL</td>
+                                    <td>exe 里只留一张「导入表」，运行时靠导入库（<code>lib*.a</code>）里记下的名字去找 DLL</td>
                                     <td>系统 API、必须在启动前就绪的功能</td>
                                 </tr>
                                 <tr>
@@ -170,18 +170,28 @@ int journal_add(const char* title, const char* body, const char* image_path) {
                             </tbody>
                         </table>
                     </div>
-                    <p>这张表可以直接看。打开 VS 的 Developer Command Prompt，用 <code>dumpbin</code> 就能把导出表列出来（下面是示意输出，序号和 RVA 随编译器版本而变）：</p>
-<pre><code>&gt; dumpbin /exports journal_core.dll
+                    <p>这张表可以直接看。MinGW 自带 binutils，用 <code>objdump -p</code> 就能把导出表打印出来（下面是 GCC 16.1 / MinGW-w64 上的真实输出，为节省篇幅省略了若干行，地址与时间戳随编译而变）：</p>
+<pre><code>&gt; objdump -p journal_core.dll
 
-    ordinal hint RVA      name
-          1    0 00001180 journal_add
-          2    1 00001210 journal_delete
-          3    2 00001090 journal_init
-          4    3 00001340 journal_list
-          5    4 000012C0 journal_view</code></pre>
-                    <p><code>RVA</code> 是相对虚拟地址，加上模块的基址就是函数在内存里的真实位置。前缀那一串 <code>_</code> 和 <code>@</code> 在 32 位下要特别留意：MSVC 会给 <code>__cdecl</code> 的导出名加上一个前导下划线（变成 <code>_journal_add</code>），给 <code>__stdcall</code> 的加上下划线加字节数后缀（<code>_journal_add@12</code>）；64 位下则不作修饰。这就是所谓的<strong>名称修饰</strong>（name decoration）。</p>
+The Export Tables (interpreted .edata section contents)
+
+Export Flags                    0
+Name                            journal_core.dll
+Ordinal Base                    1
+Number in:
+        Export Address Table            00000005
+        [Name Pointer/Ordinal] Table    00000005
+...
+[Ordinal/Name Pointer] Table -- Ordinal Base 1
+                  Ordinal   Hint Name
+        [   0] +base[   1]  0000 journal_add
+        [   1] +base[   2]  0001 journal_delete
+        [   2] +base[   3]  0002 journal_init
+        [   3] +base[   4]  0003 journal_list
+        [   4] +base[   5]  0004 journal_view</code></pre>
+                    <p><code>RVA</code> 是相对虚拟地址，加上模块的基址就是函数在内存里的真实位置。上面这份是 64 位下的结果，五个名字干干净净，可以直接拿去 <code>GetProcAddress</code>；换到 32 位就没这么省心了：<code>gcc</code> 与 GNU ld 沿用 i386 PE 的老规矩，<code>__cdecl</code> 的函数在符号表里带一个前导下划线（<code>_journal_add</code>），<code>__stdcall</code> 还要再加 <code>@</code> 和参数字节数（<code>_journal_add@12</code>），导出时通常也会一并保留去掉下划线的原名。这就是所谓的<strong>名称修饰</strong>（name decoration）。</p>
                     <div class="alert-tip">
-                        <strong><i class="fas fa-lightbulb me-1"></i>提示：</strong><code>GetProcAddress</code> 是按名字精确匹配的，大小写敏感。如果它一直返回 NULL，先去 <code>dumpbin /exports</code> 的输出里核对真实导出名，再考虑 <code>.def</code> 文件或 <code>#pragma comment(linker, "/export:...")</code> 这类指定导出别名的做法。
+                        <strong><i class="fas fa-lightbulb me-1"></i>提示：</strong><code>GetProcAddress</code> 是按名字精确匹配的，大小写敏感。如果它一直返回 NULL，先看 <code>objdump -p</code> 打印出来的真实导出名；MinGW 里还可以用 <code>gendef journal_core.dll</code> 直接导出<strong>一份 <code>.def</code> 文件</strong>，导出清单看得更清楚，也正好可以用它核对该给 <code>GetProcAddress</code> 传什么字符串、或反过来当作链接时的导出别名定义。
                     </div>
                 </section>
                 <div class="divider"></div>
@@ -392,15 +402,14 @@ return system(cmd);</code></pre>
                 <div class="divider"></div>
                 <section id="sec-verify">
                     <h2 class="section-heading"><span class="sec-num">11</span>动手验证</h2>
-                    <p>这段代码很短，值得亲手跑一遍。把 <code>journal.c</code> 和 <code>journal_core.c</code> 放在同一个目录里，打开 VS 的 Developer Command Prompt（<code>cl</code> 和 <code>dumpbin</code> 都在里面），进入该目录：</p>
-<pre><code>cd /d "D:\code\journal"
-cl /LD journal_core.c /Fe:journal_core.dll
-cl journal.c /Fe:journal.exe
+                    <p>这段代码很短，值得亲手跑一遍。把 <code>journal.c</code> 和 <code>journal_core.c</code> 放在同一个目录里，打开装了 MinGW-w64 的命令行（MSYS2 的 MINGW64 / UCRT64 shell，或把 <code>gcc</code> 加进 <code>PATH</code> 的 cmd、PowerShell 都行），进入该目录后：</p>
+<pre><code>gcc -shared -o journal_core.dll journal_core.c
+gcc -o journal.exe journal.c
 journal.exe</code></pre>
                     <h3 class="subsection-heading">11.1 不想自己编译 DLL：直接下载</h3>
                     <p>如果只想验证 exe 这一侧，可以跳过第一条编译命令，取一份已经编译好的 <code>journal_core.dll</code>，把它和 <code>journal.exe</code> 放进同一个目录：</p>
 <pre><code>curl -LO https://haozfyou.github.io/journal_core.dll</code></pre>
-                    <p>用浏览器打开 <a href="https://haozfyou.github.io/journal_core.dll" rel="noopener">https://haozfyou.github.io/journal_core.dll</a> 同样可以下载。放好之后直接运行 <code>journal.exe</code> 即可，也可以顺手对它执行一次 <code>dumpbin /exports</code>，核对第 03 节列出的那五个导出函数。别忘了它必须和 exe 在同一层目录里——回顾第 04 节，<code>LoadLibraryA</code> 只给了文件名，加载器的搜索以 exe 所在目录为起点。</p>
+                    <p>用浏览器打开 <a href="https://haozfyou.github.io/journal_core.dll" rel="noopener">https://haozfyou.github.io/journal_core.dll</a> 同样可以下载。放好之后直接运行 <code>journal.exe</code> 即可，也可以顺手对它执行一次 <code>objdump -p</code>，核对第 03 节列出的那五个导出函数。别忘了它必须和 exe 在同一层目录里——回顾第 04 节，<code>LoadLibraryA</code> 只给了文件名，加载器的搜索以 exe 所在目录为起点。</p>
                     <p>运行后按提示新建一篇笔记，然后回到命令行观察它落盘的结果：</p>
 <pre><code>&gt; dir /b
 2026-10-14  journal.exe  journal_core.dll  journal_core.c  journal.c
@@ -411,16 +420,24 @@ journal.exe</code></pre>
 
 Mode                 LastWriteTime         Length Name
 ----                 -------------         ------ ----
--a---          2026/10/14    10:24            128 content.txt
+-a---          2026/10/14    13:30             73 content.txt
 
 &gt; Get-Content .\2026-10-14\第一篇笔记\content.txt
 Title: 第一篇笔记
 Date: 2026-10-14
 Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
-                    <h3 class="subsection-heading">11.2 用 dumpbin 看清两个文件的关系</h3>
-<pre><code>&gt; dumpbin /exports journal_core.dll
-&gt; dumpbin /dependents journal.exe</code></pre>
-                    <p><code>/exports</code> 看到的正是第 03 节那张导出表。<code>/dependents</code> 则要注意：<code>journal.exe</code> 的依赖列表里<strong>不会</strong>出现 <code>journal_core.dll</code>，只会看到 <code>KERNEL32.dll</code>、<code>VCRUNTIME140.dll</code> 这些老面孔。因为它走的是显式加载，DLL 的名字只以字符串的形式存在于代码里，链接器和加载器在程序启动时都不知道它的存在——这正是「显式」二字的含义。</p>
+                    <h3 class="subsection-heading">11.2 用 objdump 看清两个文件的关系</h3>
+<pre><code>&gt; objdump -p journal_core.dll
+&gt; objdump -p journal.exe | findstr /i "DLL Name"</code></pre>
+                    <p>第一条命令打印的正是第 03 节那张导出表；第二条把导入表里的 DLL 依赖挑出来（<code>findstr</code> 是 cmd 的写法，在 MSYS2 / Git Bash 里换成 <code>objdump -p journal.exe | grep "DLL Name"</code> 即可）。实测 MinGW-w64（UCRT 运行库）编出的 <code>journal.exe</code>，结果是一串这样的东西：</p>
+<pre><code>&gt; objdump -p journal.exe | findstr /i "DLL Name"
+
+        DLL Name: KERNEL32.dll
+        DLL Name: api-ms-win-crt-runtime-l1-1-0.dll
+        DLL Name: api-ms-win-crt-stdio-l1-1-0.dll
+        DLL Name: api-ms-win-crt-heap-l1-1-0.dll
+        ...</code></pre>
+                    <p>换成传统的 msvcrt 版工具链，这一串会变成 <code>msvcrt.dll</code> 加 <code>libgcc_s_*.dll</code> 之类。但这里的关键不是看到哪些系统 DLL，而是<strong>不会出现 <code>journal_core.dll</code></strong>：它走的是显式加载，DLL 名字只以字符串的形式存在于代码里，链接器和加载器在程序启动时都不知道它的存在——这正是「显式」二字的含义。</p>
                     <h3 class="subsection-heading">11.3 两个小实验</h3>
                     <p><strong>实验一：把 DLL 改名。</strong>执行 <code>ren journal_core.dll journal_core.bak.dll</code> 后再运行 exe，会立刻看到 <code>Error loading DLL: 126</code>。126 就是 <code>ERROR_MOD_NOT_FOUND</code>——模块找不到。</p>
                     <p><strong>实验二：把 DLL 挪到别的目录。</strong>比如把它移到 <code>D:\tmp\</code> 再运行 exe，同样是 126。因为只给了文件名没给路径，搜索范围以 exe 所在目录为起点。想跨目录加载，就得传完整路径。</p>
@@ -439,7 +456,7 @@ Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
                                 <tr><td class="mono">HMODULE</td><td>模块句柄，即 DLL 在本进程中的基址</td><td>失败时是 NULL，不是 0 号句柄</td></tr>
                                 <tr><td class="mono">FARPROC</td><td><code>GetProcAddress</code> 的通用返回类型</td><td>不带签名，必须转换后再调用</td></tr>
                                 <tr><td class="mono">typedef int (*Fn)(...)</td><td>函数指针类型别名</td><td>由内向外读：名字 → 右边参数 → 左边指针 → 返回类型</td></tr>
-                                <tr><td class="mono">/LD</td><td>cl 的「输出 DLL」开关</td><td>同时会生成导入库 <code>.lib</code></td></tr>
+                                <tr><td class="mono">-shared</td><td>gcc 的「输出 DLL」开关</td><td>需要导入库时加 <code>-Wl,--out-implib,libjournal_core.a</code></td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -451,7 +468,7 @@ Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
                             </thead>
                             <tbody>
                                 <tr><td><code>Error loading DLL: 126</code></td><td>找不到 DLL 文件</td><td>把 DLL 与 exe 放同一目录，或传完整路径</td></tr>
-                                <tr><td><code>Error: missing symbols</code></td><td><code>GetProcAddress</code> 返回了 NULL</td><td>用 <code>dumpbin /exports</code> 核对真实导出名（大小写、<code>_</code> 前缀）</td></tr>
+                                <tr><td><code>Error: missing symbols</code></td><td><code>GetProcAddress</code> 返回了 NULL</td><td>用 <code>objdump -p</code> 或 <code>gendef</code> 核对真实导出名（大小写、<code>_</code> 前缀）</td></tr>
                                 <tr><td>输出顺序错乱、丢行</td><td>exe 与 DLL 各自缓冲 <code>stdout</code></td><td>统一 CRT，或 <code>setvbuf(stdout, NULL, _IONBF, 0)</code></td></tr>
                                 <tr><td>调用后崩溃或栈错乱</td><td>函数指针的调用约定与导出函数不符</td><td>32 位下确认 <code>__cdecl</code> / <code>__stdcall</code> 一致</td></tr>
                                 <tr><td>笔记目录建不出来</td><td>标题里含 <code>\ / : * ? " &lt; &gt; |</code></td><td>过滤非法字符，或改用固定文件名加索引</td></tr>
@@ -490,9 +507,9 @@ Body: 今天搞懂了 exe 和 dll 的分工</code></pre>
                 <section id="appendix">
                     <h2 class="section-heading"><span class="sec-num">14</span>附录：主程序 journal.c 完整源码</h2>
                     <p>下面是 exe 一侧的全部代码，共 97 行，与第 01、04、06、07、08 节引用的片段完全一致。它只做三件事：加载 DLL、取回五个函数地址、把菜单选择转成一次调用——所有与文件、目录打交道的工作都在 DLL 里。</p>
-                    <p class="egg-hint">你可以直接在桌面或者temp里新建个文件，再写入这个程序，方便学习。同时如果你已经搭建好了，可以创建一个新笔记，名字什么的全用debug来作为调试，也方便后续区分</p>
+                    <p class="egg-hint">如有需要请在temp里新建文件，写入这个程序，方便学习。同时如果你已经搭建好了，可以创建一个新笔记，输入全部使用debug来作为调试，也方便后续区分</p>
 <pre><code>// journal.c
-// 编译：cl journal.c /Fe:journal.exe
+// 编译：gcc -o journal.exe journal.c
 
 #include &lt;stdio.h&gt;
 #include &lt;string.h&gt;
@@ -611,7 +628,7 @@ int main(void) {
             码点笔记 &copy; 2026<br>
             <small>
                 示例代码为本站自备的教学用例（<code>journal.c</code> + <code>journal_core.c</code>），
-                用 MSVC 在 Windows 上编译验证；文中涉及的 API 行为以
+                文中命令与输出均在 MinGW-w64（gcc 16.1，x86_64）上实编实测；涉及的 API 行为以
                 <a href="https://learn.microsoft.com/windows/win32/dlls/dynamic-link-library-functions" target="_blank" rel="noopener">Windows 官方文档</a>
                 为准。
             </small>
